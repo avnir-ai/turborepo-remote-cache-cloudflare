@@ -146,6 +146,8 @@ out
 
 .nuxt
 dist
+.nitro
+.output
 
 # Gatsby files
 

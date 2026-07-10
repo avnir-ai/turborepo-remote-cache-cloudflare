@@ -1,321 +1,296 @@
-import { createExecutionContext, reset, waitOnExecutionContext } from 'cloudflare:test';
-import { env } from 'cloudflare:workers';
-import { describe, beforeEach, expect, test } from 'vitest';
+import { Files } from 'files-sdk';
+import { memory } from 'files-sdk/memory';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
-import { Env, workerHandler } from '~/index';
+import { app } from '~/routes';
 import { DEFAULT_TEAM_ID } from '~/routes/v8/artifacts';
-import { StorageManager } from '~/storage';
+
+import { createTestAppContext, withAuthorization, type TestAppContext } from '../../helpers/app';
 
 describe('v8 Artifacts API', () => {
-  const app = workerHandler;
-  let workerEnv: Env;
-  let ctx: ExecutionContext;
-  const artifactId = 'UNIQUE-artifactId-' + Math.random();
-  const artifactTag = 'UNIQUE-artifactTag-' + Math.random();
-  const teamId = 'UNIQUE-teamId-' + Math.random();
-  const artifactContent = '🎉😄😇';
+  let artifactContent: string;
+  let artifactId: string;
+  let artifactTag: string;
+  let context: TestAppContext;
+  let teamId: string;
 
-  beforeEach(async () => {
-    await reset();
+  beforeEach(() => {
+    context = createTestAppContext();
+    artifactId = `artifact-${crypto.randomUUID()}`;
+    artifactTag = `tag-${crypto.randomUUID()}`;
+    teamId = `team-${crypto.randomUUID()}`;
+    artifactContent = '🎉😄😇';
+  });
+
+  afterEach(async () => {
+    await context.waitForBackgroundWork();
+  });
+
+  const artifactUrl = (query = `teamId=${teamId}`) =>
+    `http://localhost/v8/artifacts/${artifactId}${query ? `?${query}` : ''}`;
+
+  const getArtifact = (query?: string) =>
+    app.fetch(
+      new Request(artifactUrl(query), {
+        headers: withAuthorization(),
+      }),
+      context.bindings,
+    );
+
+  const headArtifact = (query?: string) =>
+    app.fetch(
+      new Request(artifactUrl(query), {
+        headers: withAuthorization(),
+        method: 'HEAD',
+      }),
+      context.bindings,
+    );
+
+  const putArtifact = (query?: string, tag?: string) =>
+    app.fetch(
+      new Request(artifactUrl(query), {
+        body: artifactContent,
+        headers: withAuthorization({
+          'Content-Type': 'application/octet-stream',
+          ...(tag ? { 'x-artifact-tag': tag } : {}),
+        }),
+        method: 'PUT',
+      }),
+      context.bindings,
+    );
+
+  describe('authentication', () => {
+    test.each(['GET', 'HEAD'])('rejects an unauthenticated %s request', async (method) => {
+      const response = await app.fetch(
+        new Request(artifactUrl(), {
+          method,
+        }),
+        context.bindings,
+      );
+
+      expect(response.status).toBe(401);
+    });
+
+    test('rejects an unauthenticated PUT request', async () => {
+      const response = await app.fetch(
+        new Request(artifactUrl(), {
+          body: artifactContent,
+          headers: { 'Content-Type': 'application/octet-stream' },
+          method: 'PUT',
+        }),
+        context.bindings,
+      );
+
+      expect(response.status).toBe(401);
+    });
+
+    test('does not let an unauthenticated request read a cached artifact', async () => {
+      await context.files.upload(`${teamId}/${artifactId}`, artifactContent);
+      expect((await getArtifact()).status).toBe(200);
+      await context.waitForBackgroundWork();
+
+      const response = await app.fetch(new Request(artifactUrl()), context.bindings);
+      expect(response.status).toBe(401);
+    });
   });
 
   describe('GET artifact endpoint', () => {
     beforeEach(async () => {
-      workerEnv = env;
-      workerEnv.STORAGE_MANAGER = new StorageManager(workerEnv);
-      ctx = createExecutionContext();
-      await workerEnv.STORAGE_MANAGER.getActiveStorage().write(
-        `${teamId}/${artifactId}`,
-        artifactContent,
-        { artifactTag },
-      );
-    });
-
-    function createArtifactGetRequest(url: string) {
-      return new Request(url, {
-        headers: { Authorization: 'Bearer ' + workerEnv.TURBO_TOKEN },
-        method: 'GET',
+      await context.files.upload(`${teamId}/${artifactId}`, artifactContent, {
+        contentType: 'application/octet-stream',
+        metadata: { artifactTag },
       });
-    }
-
-    test('should use the default team ID when none is provided', async () => {
-      let request = createArtifactGetRequest(`http://localhost/v8/artifacts/${artifactId}`);
-      let res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(404);
-
-      await workerEnv
-        .STORAGE_MANAGER!.getActiveStorage()
-        .write(`${DEFAULT_TEAM_ID}/${artifactId}`, artifactContent, { artifactTag });
-
-      request = createArtifactGetRequest(`http://localhost/v8/artifacts/${artifactId}`);
-      res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(200);
     });
 
-    test('should return 404 when artifact does not exist', async () => {
-      const request = createArtifactGetRequest(
-        `http://localhost/v8/artifacts/missing-${artifactId}?teamId=${teamId}`,
-      );
-      const res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(404);
+    test('uses the legacy default team ID when no team is provided', async () => {
+      expect((await getArtifact('')).status).toBe(404);
+
+      await context.files.upload(`${DEFAULT_TEAM_ID}/${artifactId}`, artifactContent);
+
+      expect((await getArtifact('')).status).toBe(200);
     });
 
-    test('should return 200 when artifact exists', async () => {
-      const request = createArtifactGetRequest(
-        `http://localhost/v8/artifacts/${artifactId}?teamId=${teamId}`,
+    test('returns 404 when the artifact does not exist', async () => {
+      const response = await app.fetch(
+        new Request(`${artifactUrl()}-missing`, { headers: withAuthorization() }),
+        context.bindings,
       );
-      const res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(200);
+
+      expect(response.status).toBe(404);
     });
 
-    test('should accept both teamId and slug as query params', async () => {
-      const request = createArtifactGetRequest(
-        `http://localhost/v8/artifacts/${artifactId}?teamId=${teamId}`,
-      );
-      const res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(200);
-
-      const request2 = createArtifactGetRequest(
-        `http://localhost/v8/artifacts/${artifactId}?slug=${teamId}`,
-      );
-      const res2 = await app.fetch(request2, workerEnv, ctx);
-      expect(res2.status).toBe(200);
+    test.each(['teamId', 'slug'])('accepts the %s team selector', async (selector) => {
+      expect((await getArtifact(`${selector}=${teamId}`)).status).toBe(200);
     });
 
-    test('should return artifact content when artifact exists', async () => {
-      const request = createArtifactGetRequest(
-        `http://localhost/v8/artifacts/${artifactId}?teamId=${teamId}`,
-      );
-      const res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(200);
-      expect(await res.text()).toBe(artifactContent);
+    test('returns content, signed-cache metadata, and cache headers', async () => {
+      const response = await getArtifact();
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Content-Type')).toBe('application/octet-stream');
+      expect(response.headers.get('x-artifact-tag')).toBe(artifactTag);
+      expect(response.headers.get('Cache-Control')).toBe('max-age=300, stale-while-revalidate=300');
+      expect(new TextDecoder().decode(await response.arrayBuffer())).toBe(artifactContent);
     });
 
-    test('should return the proper content type when artifact exists', async () => {
-      const request = createArtifactGetRequest(
-        `http://localhost/v8/artifacts/${artifactId}?teamId=${teamId}`,
-      );
-      const res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(200);
-      expect(await res.text()).toBe(artifactContent);
-      expect(res.headers.get('Content-Type')).toBe('application/octet-stream');
-    });
+    test('caches authorized artifact responses for subsequent reads', async () => {
+      const response = await getArtifact();
+      expect(response.status).toBe(200);
+      await response.arrayBuffer();
+      await context.waitForBackgroundWork();
 
-    test('should return the artifact tag', async () => {
-      const request = createArtifactGetRequest(
-        `http://localhost/v8/artifacts/${artifactId}?teamId=${teamId}`,
-      );
-      const res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(200);
-      expect(await res.text()).toBe(artifactContent);
-      expect(res.headers.get('Content-Type')).toBe('application/octet-stream');
-      expect(res.headers.get('x-artifact-tag')).toBe(artifactTag);
-    });
+      await context.files.delete(`${teamId}/${artifactId}`);
+      const cachedResponse = await getArtifact();
 
-    test('should return cache headers on every request', async () => {
-      const request = createArtifactGetRequest(
-        `http://localhost/v8/artifacts/${artifactId}?teamId=${teamId}`,
-      );
-      const res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(200);
-      expect(res.headers.get('Cache-Control')).toBe('max-age=300, stale-while-revalidate=300');
-    });
-
-    test('should cache authorized artifact responses', async () => {
-      const url = `http://localhost/v8/artifacts/${artifactId}?teamId=${teamId}`;
-      const request = createArtifactGetRequest(url);
-      const res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(200);
-
-      await waitOnExecutionContext(ctx);
-
-      const artifactCache = await caches.open('r2-artifacts');
-      const cachedRes = await artifactCache.match(url);
-      expect(cachedRes?.status).toBe(200);
-      expect(cachedRes?.headers.get('Cache-Control')).toBe(
-        'max-age=300, stale-while-revalidate=300',
-      );
-      expect(await cachedRes?.text()).toBe(artifactContent);
+      expect(cachedResponse.status).toBe(200);
+      expect(new TextDecoder().decode(await cachedResponse.arrayBuffer())).toBe(artifactContent);
     });
   });
 
   describe('PUT artifact endpoint', () => {
-    beforeEach(() => {
-      workerEnv = env;
-      workerEnv.STORAGE_MANAGER = new StorageManager(workerEnv);
-      ctx = createExecutionContext();
+    test('stores an artifact under the default team ID', async () => {
+      const response = await putArtifact('');
+
+      expect(response.status).toBe(202);
+      expect(await (await context.files.download(`${DEFAULT_TEAM_ID}/${artifactId}`)).text()).toBe(
+        artifactContent,
+      );
     });
 
-    function createArtifactPutRequest(url: string, includeTag = false) {
-      const request = new Request(url, {
-        headers: {
-          Authorization: 'Bearer ' + workerEnv.TURBO_TOKEN,
-          'Content-Type': 'application/octet-stream',
-        },
-        method: 'PUT',
-        body: artifactContent,
+    test.each(['teamId', 'slug'])('stores an artifact selected by %s', async (selector) => {
+      const response = await putArtifact(`${selector}=${teamId}`);
+
+      expect(response.status).toBe(202);
+      expect(await (await context.files.download(`${teamId}/${artifactId}`)).text()).toBe(
+        artifactContent,
+      );
+    });
+
+    test('persists an artifact tag through Files SDK metadata', async () => {
+      const response = await putArtifact(undefined, artifactTag);
+
+      expect(response.status).toBe(202);
+      const artifact = await context.files.head(`${teamId}/${artifactId}`);
+      expect(artifact.metadata).toMatchObject({ artifacttag: artifactTag });
+      expect(Number(artifact.metadata?.cachecreatedat)).toEqual(expect.any(Number));
+    });
+
+    test('fails signed caching explicitly when the adapter lacks metadata support', async () => {
+      const adapter = memory();
+      Object.defineProperty(adapter, 'supportsMetadata', { value: false });
+      context = createTestAppContext();
+      context.bindings.FILES = new Files({ adapter });
+
+      const response = await putArtifact(undefined, artifactTag);
+
+      expect(response.status).toBe(501);
+      expect(await response.json()).toEqual({
+        error: 'The configured storage adapter does not support signed caching metadata',
       });
-      if (includeTag) {
-        request.headers.set('x-artifact-tag', artifactTag);
-      }
-      return request;
-    }
-
-    test('should use the default team ID when none is provided', async () => {
-      const request = createArtifactPutRequest(`http://localhost/v8/artifacts/${artifactId}`);
-      const res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(202);
-
-      const artifactStream = await workerEnv
-        .STORAGE_MANAGER!.getActiveStorage()
-        .read(`${DEFAULT_TEAM_ID}/${artifactId}`);
-      const artifact = await StorageManager.readableStreamToText(artifactStream!);
-      expect(artifact).toEqual(artifactContent);
     });
 
-    test('should successfully save artifact', async () => {
-      const request = createArtifactPutRequest(
-        `http://localhost/v8/artifacts/${artifactId}?teamId=${teamId}`,
+    test('rejects a request without the Turborepo artifact content type', async () => {
+      const response = await app.fetch(
+        new Request(artifactUrl(), {
+          body: artifactContent,
+          headers: withAuthorization(),
+          method: 'PUT',
+        }),
+        context.bindings,
       );
-      const res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(202);
 
-      const artifactStream = await workerEnv
-        .STORAGE_MANAGER!.getActiveStorage()
-        .read(`${teamId}/${artifactId}`);
-      const artifact = await StorageManager.readableStreamToText(artifactStream!);
-      expect(artifact).toEqual(artifactContent);
+      expect(response.status).toBe(400);
     });
 
-    test('should accept both teamId and slug as query params', async () => {
-      const request = createArtifactPutRequest(
-        `http://localhost/v8/artifacts/${artifactId}?teamId=${teamId}`,
-      );
-      const res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(202);
+    test('requires a known length for native R2 uploads', async () => {
+      Object.defineProperty(context.adapter, 'name', { value: 'r2-binding' });
 
-      const request2 = createArtifactPutRequest(
-        `http://localhost/v8/artifacts/${artifactId}?slug=${teamId}`,
-      );
-      const res2 = await app.fetch(request2, workerEnv, ctx);
-      expect(res2.status).toBe(202);
+      const response = await putArtifact();
+
+      expect(response.status).toBe(411);
+      expect(await response.text()).toContain('Content-Length is required');
     });
 
-    test('should save artifact tag when provided', async () => {
-      const request = createArtifactPutRequest(
-        `http://localhost/v8/artifacts/${artifactId}?teamId=${teamId}`,
-        true,
+    test('streams a known-length upload through the native R2 path', async () => {
+      Object.defineProperty(context.adapter, 'name', { value: 'r2-binding' });
+      const response = await app.fetch(
+        new Request(artifactUrl(), {
+          body: artifactContent,
+          headers: withAuthorization({
+            'Content-Length': String(new TextEncoder().encode(artifactContent).byteLength),
+            'Content-Type': 'application/octet-stream',
+          }),
+          method: 'PUT',
+        }),
+        context.bindings,
       );
-      const res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(202);
 
-      const artifactWithMeta = await workerEnv
-        .STORAGE_MANAGER!.getActiveStorage()
-        .readWithMetadata(`${teamId}/${artifactId}`);
-      const artifact = await StorageManager.readableStreamToText(artifactWithMeta.data!);
-      expect(artifact).toEqual(artifactContent);
-      expect(artifactWithMeta?.metadata?.customMetadata?.artifactTag).toEqual(artifactTag);
-    });
-
-    test('should return 400 when content type is not application/octet-stream', async () => {
-      const request = createArtifactPutRequest(
-        `http://localhost/v8/artifacts/${artifactId}?teamId=${teamId}`,
+      expect(response.status).toBe(202);
+      expect(await (await context.files.download(`${teamId}/${artifactId}`)).text()).toBe(
+        artifactContent,
       );
-      request.headers.delete('Content-Type');
-      const res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(400);
     });
   });
 
   describe('HEAD artifact endpoint', () => {
     beforeEach(async () => {
-      workerEnv = env;
-      workerEnv.STORAGE_MANAGER = new StorageManager(workerEnv);
-      ctx = createExecutionContext();
-      await workerEnv.STORAGE_MANAGER.getActiveStorage().write(
-        `${teamId}/${artifactId}`,
-        artifactContent,
-        { artifactTag },
-      );
-    });
-
-    function createArtifactHeadRequest(url: string) {
-      return new Request(url, {
-        headers: { Authorization: 'Bearer ' + workerEnv.TURBO_TOKEN },
-        method: 'HEAD',
+      await context.files.upload(`${teamId}/${artifactId}`, artifactContent, {
+        metadata: { artifactTag },
       });
-    }
-
-    test('should use the default team ID when none is provided', async () => {
-      let request = createArtifactHeadRequest(`http://localhost/v8/artifacts/${artifactId}`);
-      let res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(404);
-
-      await workerEnv
-        .STORAGE_MANAGER!.getActiveStorage()
-        .write(`${DEFAULT_TEAM_ID}/${artifactId}`, artifactContent, { artifactTag });
-      request = createArtifactHeadRequest(`http://localhost/v8/artifacts/${artifactId}`);
-      res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(200);
     });
 
-    test('should return 404 when artifact does not exist', async () => {
-      const request = createArtifactHeadRequest(
-        `http://localhost/v8/artifacts/missing-${artifactId}?teamId=${teamId}`,
-      );
-      const res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(404);
+    test('uses the default team ID when no team is provided', async () => {
+      expect((await headArtifact('')).status).toBe(404);
+      await context.files.upload(`${DEFAULT_TEAM_ID}/${artifactId}`, artifactContent);
+      expect((await headArtifact('')).status).toBe(200);
     });
 
-    test('should return 200 when artifact exists', async () => {
-      const request = createArtifactHeadRequest(
-        `http://localhost/v8/artifacts/${artifactId}?teamId=${teamId}`,
+    test('returns 404 without a body when the artifact does not exist', async () => {
+      const response = await app.fetch(
+        new Request(`${artifactUrl()}-missing`, {
+          headers: withAuthorization(),
+          method: 'HEAD',
+        }),
+        context.bindings,
       );
-      const res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(200);
+
+      expect(response.status).toBe(404);
+      expect(await response.text()).toBe('');
     });
 
-    test('should accept both teamId and slug as query params', async () => {
-      const request = createArtifactHeadRequest(
-        `http://localhost/v8/artifacts/${artifactId}?teamId=${teamId}`,
-      );
-      const res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(200);
+    test.each(['teamId', 'slug'])(
+      'checks an artifact selected by %s without downloading a body',
+      async (selector) => {
+        const response = await headArtifact(`${selector}=${teamId}`);
 
-      const request2 = createArtifactHeadRequest(
-        `http://localhost/v8/artifacts/${artifactId}?slug=${teamId}`,
-      );
-      const res2 = await app.fetch(request2, workerEnv, ctx);
-      expect(res2.status).toBe(200);
-    });
+        expect(response.status).toBe(200);
+        expect(response.headers.get('x-artifact-tag')).toBe(artifactTag);
+        expect(await response.text()).toBe('');
+      },
+    );
   });
 
   describe('Artifact events endpoint', () => {
-    beforeEach(() => {
-      workerEnv = env;
-      workerEnv.STORAGE_MANAGER = new StorageManager(workerEnv);
-      ctx = createExecutionContext();
-    });
+    test('accepts a valid Turborepo event batch', async () => {
+      const response = await app.fetch(
+        new Request('http://localhost/v8/artifacts/events', {
+          body: JSON.stringify([
+            {
+              duration: 400,
+              event: 'HIT',
+              hash: '12HKQaOmR5t5Uy6vdcQsNIiZgHGB',
+              sessionId: '30fb7fdf-8124-4fce-8121-d525170942a0',
+              source: 'LOCAL',
+            },
+          ]),
+          headers: withAuthorization({ 'Content-Type': 'application/json' }),
+          method: 'POST',
+        }),
+        context.bindings,
+      );
 
-    test('it should return 200', async () => {
-      const request = new Request('http://localhost/v8/artifacts/events', {
-        headers: {
-          Authorization: 'Bearer ' + workerEnv.TURBO_TOKEN,
-          'Content-Type': 'application/json',
-        },
-        method: 'POST',
-        body: JSON.stringify([
-          {
-            sessionId: '30fb7fdf-8124-4fce-8121-d525170942a0',
-            source: 'LOCAL',
-            event: 'HIT',
-            hash: '12HKQaOmR5t5Uy6vdcQsNIiZgHGB',
-            duration: 400,
-          },
-        ]),
-      });
-      const res = await app.fetch(request, workerEnv, ctx);
-      expect(res.status).toBe(200);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({});
     });
   });
 });

@@ -1,31 +1,62 @@
 import { vValidator } from '@hono/valibot-validator';
+import { FilesError, type Body } from 'files-sdk';
+import { HTTPException } from 'hono/http-exception';
 import { Hono } from 'hono/tiny';
 import * as v from 'valibot';
 
-import type { Env } from '../..';
+import type { AppBindings, WaitUntil } from '../../runtime/app-env';
 
 import { bearerAuthFromEnv } from '../auth';
 
 export const DEFAULT_TEAM_ID = 'team_default_team';
 const ARTIFACT_CACHE_NAME = 'r2-artifacts';
 const ARTIFACT_CACHE_CONTROL = 'max-age=300, stale-while-revalidate=300';
-type WaitUntilContext = {
-  waitUntil: (promise: Promise<unknown>) => void;
-};
+const ARTIFACT_TAG_METADATA_KEY = 'artifacttag';
 
 // Route - /v8/artifacts
-export const artifactRouter = new Hono<{ Bindings: Env }>();
+export const artifactRouter = new Hono<{ Bindings: AppBindings }>();
 
 artifactRouter.use('*', bearerAuthFromEnv);
 
-const getActiveStorage = (env: Env) => {
-  if (!env.STORAGE_MANAGER) {
-    throw new Error('Storage manager is not configured');
-  }
-  return env.STORAGE_MANAGER.getActiveStorage();
-};
-
 const vCoerceNumber = () => v.pipe(v.unknown(), v.transform(Number), v.number());
+
+interface UploadBody {
+  body: Body;
+  pipe?: Promise<void>;
+}
+
+const prepareUploadBody = async (
+  body: ReadableStream<Uint8Array> | null,
+  contentLength?: number,
+  adapterName?: string,
+): Promise<UploadBody> => {
+  if (!body) return { body: new Uint8Array() };
+  if (adapterName !== 'r2-binding') return { body };
+  if (contentLength === undefined) {
+    throw new HTTPException(411, {
+      message: 'Content-Length is required when uploading through an R2 binding',
+    });
+  }
+  if (typeof FixedLengthStream !== 'undefined') {
+    // Nitro preserves the Content-Length header, but the Request body it exposes
+    // is no longer tagged as a fixed-length stream. R2's native binding requires
+    // that tag, so restore it without buffering the artifact.
+    const fixedLengthBody = new FixedLengthStream(contentLength);
+    return {
+      body: fixedLengthBody.readable,
+      pipe: body.pipeTo(fixedLengthBody.writable),
+    };
+  }
+
+  // Nitro's Cloudflare development emulator exposes the R2 binding to Node,
+  // where FixedLengthStream is unavailable. Buffer only that local fallback;
+  // production Workers take the streaming path above.
+  const bufferedBody = await new Response(body).arrayBuffer();
+  if (bufferedBody.byteLength !== contentLength) {
+    throw new HTTPException(400, { message: 'Content-Length does not match the request body' });
+  }
+  return { body: bufferedBody };
+};
 
 const canUseArtifactCache = (request: Request) =>
   request.method === 'GET' && typeof caches !== 'undefined';
@@ -40,19 +71,18 @@ const getCachedArtifactResponse = async (request: Request) => {
   return cachedResponse;
 };
 
-const cacheArtifactResponse = (
-  executionCtx: WaitUntilContext,
-  request: Request,
-  response: Response,
-) => {
+const cacheArtifactResponse = (waitUntil: WaitUntil, request: Request, response: Response) => {
   if (!canUseArtifactCache(request)) return;
 
-  executionCtx.waitUntil(
+  waitUntil(
     caches
       .open(ARTIFACT_CACHE_NAME)
       .then((artifactCache) => artifactCache.put(request.url, response)),
   );
 };
+
+const isNotFound = (error: unknown): boolean =>
+  error instanceof FilesError && error.code === 'NotFound';
 
 artifactRouter.post(
   '/',
@@ -87,7 +117,7 @@ artifactRouter.put(
     'header',
     v.object({
       'content-type': v.literal('application/octet-stream'),
-      'content-length': v.optional(vCoerceNumber()),
+      'content-length': v.optional(v.pipe(vCoerceNumber(), v.integer(), v.minValue(0))),
       'x-artifact-duration': v.optional(vCoerceNumber()),
       'x-artifact-client-ci': v.optional(v.string()),
       'x-artifact-client-interactive': v.optional(
@@ -102,14 +132,32 @@ artifactRouter.put(
     const teamId = teamIdQuery ?? slug ?? DEFAULT_TEAM_ID;
     const validatedHeaders = c.req.valid('header');
 
-    const storage = getActiveStorage(c.env);
+    const files = c.env.FILES;
     const objectKey = `${teamId}/${artifactId}`;
 
-    const storageMetadata: Record<string, string> = {};
-    if (validatedHeaders['x-artifact-tag']) {
-      storageMetadata.artifactTag = validatedHeaders['x-artifact-tag'];
+    const artifactTag = validatedHeaders['x-artifact-tag'];
+    if (artifactTag && !files.capabilities.metadata) {
+      return c.json(
+        { error: 'The configured storage adapter does not support signed caching metadata' },
+        501,
+      );
     }
-    await storage.write(objectKey, c.req.raw.body!, storageMetadata);
+    const metadata = files.capabilities.metadata
+      ? {
+          cachecreatedat: String(Date.now()),
+          ...(artifactTag ? { [ARTIFACT_TAG_METADATA_KEY]: artifactTag } : {}),
+        }
+      : undefined;
+    const uploadBody = await prepareUploadBody(
+      c.req.raw.body,
+      validatedHeaders['content-length'],
+      files.adapter.name,
+    );
+    const upload = files.upload(objectKey, uploadBody.body, {
+      contentType: 'application/octet-stream',
+      metadata,
+    });
+    await (uploadBody.pipe ? Promise.all([upload, uploadBody.pipe]) : upload);
 
     const uploadUrl = new URL(`${artifactId}?teamId=${teamId}`, c.req.raw.url).toString();
     return c.json({ urls: [uploadUrl] }, 202);
@@ -140,28 +188,42 @@ artifactRouter.get(
       return cachedResponse;
     }
 
-    const storage = getActiveStorage(c.env);
+    const files = c.env.FILES;
     const objectKey = `${teamId}/${artifactId}`;
 
-    const storedObject = await storage.readWithMetadata(objectKey);
-    if (!storedObject.data) {
-      return c.json({}, 404);
+    let storedObject;
+    try {
+      storedObject =
+        c.req.raw.method === 'HEAD'
+          ? await files.head(objectKey)
+          : await files.download(objectKey, { as: 'stream' });
+    } catch (error: unknown) {
+      if (isNotFound(error)) return c.json({}, 404);
+      throw error;
     }
 
     const responseHeaders: Record<string, string> = {
       'Cache-Control': ARTIFACT_CACHE_CONTROL,
       'Content-Type': 'application/octet-stream',
     };
-    if (storedObject.metadata?.customMetadata.artifactTag) {
-      responseHeaders['x-artifact-tag'] = storedObject.metadata.customMetadata.artifactTag;
+    // S3 canonicalizes user-metadata keys to lowercase. Keep the camel-case
+    // fallback so artifacts uploaded by earlier R2/KV releases remain valid.
+    const artifactTag =
+      storedObject.metadata?.[ARTIFACT_TAG_METADATA_KEY] ?? storedObject.metadata?.artifactTag;
+    if (artifactTag) {
+      responseHeaders['x-artifact-tag'] = artifactTag;
     }
-    let responseData = storedObject.data;
+    if (c.req.raw.method === 'HEAD') {
+      return c.body(null, 200, responseHeaders);
+    }
+
+    let responseData = storedObject.stream();
 
     if (canUseArtifactCache(c.req.raw)) {
-      const [clientData, cacheData] = storedObject.data.tee();
+      const [clientData, cacheData] = responseData.tee();
       responseData = clientData;
       cacheArtifactResponse(
-        c.executionCtx,
+        c.env.WAIT_UNTIL,
         c.req.raw,
         new Response(cacheData, { headers: responseHeaders, status: 200 }),
       );
