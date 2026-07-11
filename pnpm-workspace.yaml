@@ -2,3 +2,7 @@ allowBuilds:
   esbuild: true
   sharp: true
   workerd: true
+
+peerDependencyRules:
+  allowedVersions:
+    'openapi-typescript>typescript': '^6.0.0'
