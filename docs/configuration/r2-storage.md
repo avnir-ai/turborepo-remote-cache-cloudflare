@@ -51,7 +51,7 @@ pnpm deploy
 
 The native binding does not require an R2 API access key.
 
-Native-binding uploads must include `Content-Length`; Turborepo sends this header for cache artifacts. A chunked client without a known length receives `411 Length Required` because buffering an unbounded R2 artifact inside a Worker is unsafe.
+Native-binding uploads must include `Content-Length`; Turborepo sends this header for cache artifacts. A chunked client without a known length receives the API's structured `400 bad_request` response because buffering an unbounded R2 artifact inside a Worker is unsafe.
 
 ## Credential mode
 
