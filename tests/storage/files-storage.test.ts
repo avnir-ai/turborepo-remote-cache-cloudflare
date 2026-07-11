@@ -54,6 +54,7 @@ describe('storage provider selection', () => {
   });
 
   test('creates a binding-native R2 Files client with metadata support', async () => {
+    const key = crypto.randomUUID();
     const { files, provider, retentionHours } = await createStorageServices({
       CACHE_RETENTION_HOURS: '24',
       R2_STORE: env.R2_STORE,
@@ -64,15 +65,16 @@ describe('storage provider selection', () => {
     expect(retentionHours).toBe(24);
     expect(files.capabilities.metadata).toBe(true);
 
-    await files.upload('r2-factory-check', 'artifact', {
+    await files.upload(key, 'artifact', {
       metadata: { artifactTag: 'tag' },
     });
-    const stored = await files.download('r2-factory-check');
+    const stored = await files.download(key);
     expect(await stored.text()).toBe('artifact');
     expect(stored.metadata).toEqual({ artifactTag: 'tag' });
   });
 
   test('creates a prefixed KV Files client and disables TTL at zero retention', async () => {
+    const key = crypto.randomUUID();
     const { files, provider, retentionHours } = await createStorageServices({
       CACHE_RETENTION_HOURS: 0,
       KV_STORE: getKvNamespace(),
@@ -83,9 +85,9 @@ describe('storage provider selection', () => {
     expect(provider).toBe('kv');
     expect(retentionHours).toBe(0);
 
-    await files.upload('kv-factory-check', 'artifact');
-    expect(await files.download('kv-factory-check').then((file) => file.text())).toBe('artifact');
-    expect(await getKvNamespace().get('tenant/kv-factory-check')).toBe('artifact');
+    await files.upload(key, 'artifact');
+    expect(await files.download(key).then((file) => file.text())).toBe('artifact');
+    expect(await getKvNamespace().get(`tenant/${key}`)).toBe('artifact');
   });
 
   test('constructs S3 with static credentials and validates partial credentials', async () => {
