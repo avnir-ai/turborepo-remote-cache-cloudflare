@@ -59,6 +59,20 @@ describe('/internal routes', () => {
       expect(deleteOldCacheMock).toHaveBeenCalledWith(context.files, 100);
     });
 
+    test('rejects a negative retention window without running cleanup', async () => {
+      const response = await app.fetch(
+        internalRequest('delete-expired-objects', {
+          body: JSON.stringify({ expireInHours: -1 }),
+          headers: { 'Content-Type': 'application/json' },
+          method: 'POST',
+        }),
+        context.bindings,
+      );
+
+      expect(response.status).toBe(400);
+      expect(deleteOldCacheMock).not.toHaveBeenCalled();
+    });
+
     test('does not run cleanup without authentication', async () => {
       const response = await app.fetch(
         internalRequest(

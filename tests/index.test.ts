@@ -111,4 +111,25 @@ describe('remote-cache scheduled event', () => {
     expect(deleteOldCacheMock).toHaveBeenCalledOnce();
     expect(deleteOldCacheMock).toHaveBeenCalledWith(expect.anything(), 720);
   });
+
+  it('logs and rethrows retention failures', async () => {
+    const error = new Error('retention failed');
+    const consoleErrorMock = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    deleteOldCacheMock.mockRejectedValueOnce(error);
+
+    try {
+      const ctx = createExecutionContext();
+      workerHandler.scheduled(new TestScheduledEvent(), workerEnv, ctx);
+
+      await expect(waitOnExecutionContext(ctx)).rejects.toBe(error);
+      expect(consoleErrorMock).toHaveBeenCalledWith(
+        JSON.stringify({
+          message: 'Failed to delete expired cache entries',
+          error: 'retention failed',
+        }),
+      );
+    } finally {
+      consoleErrorMock.mockRestore();
+    }
+  });
 });

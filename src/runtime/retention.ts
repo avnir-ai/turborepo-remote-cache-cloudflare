@@ -4,15 +4,25 @@ import { deleteOldCache, type DeleteOldCacheResult } from '../crons/deleteOldCac
 import { createStorageServices } from '../storage/files-storage';
 
 export const runDeleteExpired = async (runtimeEnv: RuntimeEnv): Promise<DeleteOldCacheResult> => {
-  const { files, retentionHours } = await createStorageServices(runtimeEnv);
-  const result = await deleteOldCache(files, retentionHours);
-  if (result.skipped > 0) {
-    console.warn(
+  try {
+    const { files, retentionHours } = await createStorageServices(runtimeEnv);
+    const result = await deleteOldCache(files, retentionHours);
+    if (result.skipped > 0) {
+      console.warn(
+        JSON.stringify({
+          message: 'Skipped cache entries without last-modified metadata',
+          skipped: result.skipped,
+        }),
+      );
+    }
+    return result;
+  } catch (error) {
+    console.error(
       JSON.stringify({
-        message: 'Skipped cache entries without last-modified metadata',
-        skipped: result.skipped,
+        message: 'Failed to delete expired cache entries',
+        error: error instanceof Error ? error.message : String(error),
       }),
     );
+    throw error;
   }
-  return result;
 };

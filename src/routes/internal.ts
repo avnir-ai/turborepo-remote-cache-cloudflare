@@ -13,7 +13,7 @@ internalRouter.use('*', bearerAuthFromEnv);
 
 internalRouter.post(
   '/delete-expired-objects',
-  vValidator('json', v.object({ expireInHours: v.optional(v.number()) })),
+  vValidator('json', v.object({ expireInHours: v.optional(v.pipe(v.number(), v.minValue(0))) })),
   async (c) => {
     const { expireInHours } = c.req.valid('json');
     await deleteOldCache(c.env.FILES, expireInHours ?? c.env.CACHE_RETENTION_HOURS);
