@@ -11,6 +11,8 @@ The application keeps Hono as its HTTP layer and uses Nitro for development, bui
 Cloudflare Workers is the default and takes priority if a portable behavior conflicts with the Cloudflare experience.
 
 ```sh
+cp .dev.vars.example .dev.vars
+# Replace the example TURBO_TOKEN before starting the server.
 pnpm dev
 pnpm build
 pnpm preview

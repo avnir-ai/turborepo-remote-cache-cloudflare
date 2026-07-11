@@ -70,6 +70,8 @@ See the provider guides for [R2](https://adirishi.github.io/turborepo-remote-cac
 Cloudflare Workers is the default target:
 
 ```sh
+cp .dev.vars.example .dev.vars
+# Replace the example TURBO_TOKEN before starting the server.
 pnpm dev
 pnpm build
 pnpm deploy

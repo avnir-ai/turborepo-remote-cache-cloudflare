@@ -57,6 +57,8 @@ R2, KV, and S3 are first-class providers. Switching among them is configuration-
 Nitro powers development, builds, previews, and deployment output:
 
 ```sh
+cp .dev.vars.example .dev.vars
+# Replace the example TURBO_TOKEN before starting the server.
 pnpm dev
 pnpm build
 pnpm preview

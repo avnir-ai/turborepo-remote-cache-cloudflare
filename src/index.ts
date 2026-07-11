@@ -12,11 +12,20 @@ export const workerHandler = {
   fetch(request: Request, env: RuntimeEnv, ctx: ExecutionContext): Promise<Response> {
     return handleRequest(request, env, (promise) => ctx.waitUntil(promise));
   },
-  async scheduled(_event: ScheduledEvent, env: RuntimeEnv, ctx: ExecutionContext): Promise<void> {
-    const cleanup = runDeleteExpired(env);
-    ctx.waitUntil(cleanup);
-    await cleanup;
+  scheduled(
+    _event: ScheduledController | ScheduledEvent,
+    env: RuntimeEnv,
+    ctx: ExecutionContext,
+  ): void {
+    ctx.waitUntil(runDeleteExpired(env));
   },
 };
 
-export default workerHandler;
+export default {
+  fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext) {
+    return workerHandler.fetch(request, { ...env }, ctx);
+  },
+  scheduled(event: ScheduledController, env: Cloudflare.Env, ctx: ExecutionContext) {
+    return workerHandler.scheduled(event, { ...env }, ctx);
+  },
+} satisfies ExportedHandler<Cloudflare.Env>;

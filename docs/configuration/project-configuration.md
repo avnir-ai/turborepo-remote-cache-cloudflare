@@ -95,6 +95,8 @@ Store sensitive values with Wrangler:
 echo "YOUR_SECRET" | pnpm wrangler secret put TURBO_TOKEN
 ```
 
+For local development, copy `.dev.vars.example` to the ignored `.dev.vars` file and replace its placeholder token. Wrangler loads that file only into the local runtime.
+
 Use the same command for access keys when the selected provider needs them. Do not define a value in both `vars` and Wrangler secrets.
 
 ## Retention and Nitro Tasks

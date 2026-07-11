@@ -25,11 +25,6 @@ export default defineConfig({
   experimental: {
     tasks: true,
   },
-  tasks: {
-    'cache:delete-expired': {
-      description: 'Delete expired cache artifacts',
-    },
-  },
   scheduledTasks: {
     '0 3 * * *': 'cache:delete-expired',
   },

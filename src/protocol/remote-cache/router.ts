@@ -18,8 +18,8 @@ import {
 import { remoteCacheOperations } from './generated';
 import { remoteCacheHandlers } from './handlers';
 
-const ARTIFACT_CACHE_NAME = 'r2-artifacts';
-const ARTIFACT_CACHE_CONTROL = 'max-age=300, stale-while-revalidate=300';
+const ARTIFACT_CACHE_NAME = 'remote-cache-artifacts';
+const ARTIFACT_CACHE_CONTROL = 'max-age=300';
 const ARTIFACT_PATH_PREFIX = '/artifacts';
 
 type RemoteCacheEnv = { Bindings: AppBindings };
@@ -98,15 +98,6 @@ const operationRoutes = {
   uploadArtifact: operationPath('uploadArtifact', 'put'),
 } satisfies Record<RemoteCacheOperationId, string>;
 
-const unregisteredOperations = Object.keys(remoteCacheOperations).filter(
-  (operationId) => !(operationId in operationRoutes),
-);
-if (unregisteredOperations.length > 0) {
-  throw new Error(
-    `Remote cache operations are not registered: ${unregisteredOperations.join(', ')}`,
-  );
-}
-
 if (operationRoutes.downloadArtifact !== operationRoutes.artifactExists) {
   throw new Error(
     'Hono HEAD dispatch requires downloadArtifact and artifactExists to share a path',
@@ -153,17 +144,6 @@ const operationFailure = <Path extends string, InputType extends Input>(
     }),
   );
   return protocolError(c, 500, 'internal_error', 'The remote cache operation failed');
-};
-
-const runOperation = async <Path extends string, InputType extends Input>(
-  c: Context<RemoteCacheEnv, Path, InputType>,
-  operation: () => Promise<Response>,
-): Promise<Response> => {
-  try {
-    return await operation();
-  } catch (error: unknown) {
-    return operationFailure(c, error);
-  }
 };
 
 const handlerContext = <Path extends string, InputType extends Input>(
@@ -235,31 +215,29 @@ export const createArtifactRouter = (
   router.get(
     operationRoutes.getArtifactStatus,
     vValidator('query', teamQuerySchema, validationHook),
-    (c) =>
-      runOperation(c, async () => {
-        const output = await handlers.getArtifactStatus(
-          { query: c.req.valid('query') },
-          handlerContext(c),
-        );
-        return c.json(output, 200);
-      }),
+    async (c) => {
+      const output = await handlers.getArtifactStatus(
+        { query: c.req.valid('query') },
+        handlerContext(c),
+      );
+      return c.json(output, 200);
+    },
   );
 
   router.post(
     operationRoutes.queryArtifacts,
     vValidator('json', artifactQuerySchema, validationHook),
     vValidator('query', teamQuerySchema, validationHook),
-    (c) =>
-      runOperation(c, async () => {
-        const output = await handlers.queryArtifacts(
-          {
-            body: c.req.valid('json'),
-            query: c.req.valid('query'),
-          },
-          handlerContext(c),
-        );
-        return c.json(output, 200);
-      }),
+    async (c) => {
+      const output = await handlers.queryArtifacts(
+        {
+          body: c.req.valid('json'),
+          query: c.req.valid('query'),
+        },
+        handlerContext(c),
+      );
+      return c.json(output, 200);
+    },
   );
 
   router.post(
@@ -267,18 +245,17 @@ export const createArtifactRouter = (
     vValidator('json', cacheEventsSchema, validationHook),
     vValidator('query', teamQuerySchema, validationHook),
     vValidator('header', clientHeadersSchema, validationHook),
-    (c) =>
-      runOperation(c, async () => {
-        await handlers.recordCacheEvents(
-          {
-            body: c.req.valid('json'),
-            headers: c.req.valid('header'),
-            query: c.req.valid('query'),
-          },
-          handlerContext(c),
-        );
-        return c.body(null, 200);
-      }),
+    async (c) => {
+      await handlers.recordCacheEvents(
+        {
+          body: c.req.valid('json'),
+          headers: c.req.valid('header'),
+          query: c.req.valid('query'),
+        },
+        handlerContext(c),
+      );
+      return c.body(null, 200);
+    },
   );
 
   router.put(
@@ -286,33 +263,32 @@ export const createArtifactRouter = (
     vValidator('param', artifactPathSchema, validationHook),
     vValidator('query', teamQuerySchema, validationHook),
     vValidator('header', uploadHeadersSchema, validationHook),
-    (c) =>
-      runOperation(c, async () => {
-        const headers = c.req.valid('header');
-        const requestBody = c.req.raw.body;
-        if (!requestBody && headers['content-length'] !== 0) {
-          return protocolError(c, 400, 'bad_request', 'The artifact request body is required');
-        }
+    async (c) => {
+      const headers = c.req.valid('header');
+      const requestBody = c.req.raw.body;
+      if (!requestBody && headers['content-length'] !== 0) {
+        return protocolError(c, 400, 'bad_request', 'The artifact request body is required');
+      }
 
-        const output = await handlers.uploadArtifact(
-          {
-            body: requestBody ?? emptyBody(),
-            headers: {
-              'Content-Length': headers['content-length'],
-              'x-artifact-client-ci': headers['x-artifact-client-ci'],
-              'x-artifact-client-interactive': headers['x-artifact-client-interactive'],
-              'x-artifact-dirty-hash': headers['x-artifact-dirty-hash'],
-              'x-artifact-duration': headers['x-artifact-duration'],
-              'x-artifact-sha': headers['x-artifact-sha'],
-              'x-artifact-tag': headers['x-artifact-tag'],
-            },
-            path: c.req.valid('param'),
-            query: c.req.valid('query'),
+      const output = await handlers.uploadArtifact(
+        {
+          body: requestBody ?? emptyBody(),
+          headers: {
+            'Content-Length': headers['content-length'],
+            'x-artifact-client-ci': headers['x-artifact-client-ci'],
+            'x-artifact-client-interactive': headers['x-artifact-client-interactive'],
+            'x-artifact-dirty-hash': headers['x-artifact-dirty-hash'],
+            'x-artifact-duration': headers['x-artifact-duration'],
+            'x-artifact-sha': headers['x-artifact-sha'],
+            'x-artifact-tag': headers['x-artifact-tag'],
           },
-          handlerContext(c),
-        );
-        return c.json(output, 202);
-      }),
+          path: c.req.valid('param'),
+          query: c.req.valid('query'),
+        },
+        handlerContext(c),
+      );
+      return c.json(output, 202);
+    },
   );
 
   // Hono deliberately converts HEAD to GET before matching routes. Keep this
@@ -321,50 +297,49 @@ export const createArtifactRouter = (
     operationRoutes.downloadArtifact,
     vValidator('param', artifactPathSchema, validationHook),
     vValidator('query', teamQuerySchema, validationHook),
-    (c) =>
-      runOperation(c, async () => {
-        const context = handlerContext(c);
-        const path = c.req.valid('param');
-        const query = c.req.valid('query');
+    async (c) => {
+      const context = handlerContext(c);
+      const path = c.req.valid('param');
+      const query = c.req.valid('query');
 
-        if (c.req.raw.method === 'HEAD') {
-          const artifact = await handlers.artifactExists({ path, query }, context);
-          if (!artifact) {
-            return protocolError(c, 404, 'artifact_not_found', 'Artifact not found');
-          }
-          return c.body(null, 200, responseHeaders(artifact.size, artifact.metadata, false));
-        }
-
-        const parsedHeaders = v.safeParse(clientHeadersSchema, requestHeaders(c.req.raw));
-        if (!parsedHeaders.success) {
-          return protocolError(c, 400, 'bad_request', 'Request validation failed');
-        }
-
-        const cachedResponse = await getCachedArtifactResponse(c.req.raw);
-        if (cachedResponse) return cachedResponse;
-
-        const artifact = await handlers.downloadArtifact(
-          { headers: parsedHeaders.output, path, query },
-          context,
-        );
+      if (c.req.raw.method === 'HEAD') {
+        const artifact = await handlers.artifactExists({ path, query }, context);
         if (!artifact) {
           return protocolError(c, 404, 'artifact_not_found', 'Artifact not found');
         }
+        return c.body(null, 200, responseHeaders(artifact.size, artifact.metadata, false));
+      }
 
-        const headers = {
-          ...responseHeaders(artifact.size, artifact.metadata, true),
-          'Cache-Control': ARTIFACT_CACHE_CONTROL,
-          'Content-Type': 'application/octet-stream',
-        };
-        let responseBody = artifact.body;
-        if (canUseArtifactCache(c.req.raw)) {
-          const [clientBody, cacheBody] = responseBody.tee();
-          responseBody = clientBody;
-          cacheArtifactResponse(context, new Response(cacheBody, { headers, status: 200 }));
-        }
+      const parsedHeaders = v.safeParse(clientHeadersSchema, requestHeaders(c.req.raw));
+      if (!parsedHeaders.success) {
+        return protocolError(c, 400, 'bad_request', 'Request validation failed');
+      }
 
-        return c.body(responseBody, 200, headers);
-      }),
+      const cachedResponse = await getCachedArtifactResponse(c.req.raw);
+      if (cachedResponse) return cachedResponse;
+
+      const artifact = await handlers.downloadArtifact(
+        { headers: parsedHeaders.output, path, query },
+        context,
+      );
+      if (!artifact) {
+        return protocolError(c, 404, 'artifact_not_found', 'Artifact not found');
+      }
+
+      const headers = {
+        ...responseHeaders(artifact.size, artifact.metadata, true),
+        'Cache-Control': ARTIFACT_CACHE_CONTROL,
+        'Content-Type': 'application/octet-stream',
+      };
+      let responseBody = artifact.body;
+      if (canUseArtifactCache(c.req.raw)) {
+        const [clientBody, cacheBody] = responseBody.tee();
+        responseBody = clientBody;
+        cacheArtifactResponse(context, new Response(cacheBody, { headers, status: 200 }));
+      }
+
+      return c.body(responseBody, 200, headers);
+    },
   );
 
   return router;

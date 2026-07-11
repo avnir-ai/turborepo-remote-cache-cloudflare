@@ -263,7 +263,7 @@ describe('v8 Artifacts API', () => {
       expect(response.headers.get('x-artifact-tag')).toBe(artifactTag);
       expect(response.headers.get('x-artifact-sha')).toBe(artifactSha);
       expect(response.headers.get('x-artifact-dirty-hash')).toBe(artifactDirtyHash);
-      expect(response.headers.get('Cache-Control')).toBe('max-age=300, stale-while-revalidate=300');
+      expect(response.headers.get('Cache-Control')).toBe('max-age=300');
       expect(new TextDecoder().decode(await response.arrayBuffer())).toBe(artifactContent);
     });
 
@@ -330,14 +330,6 @@ describe('v8 Artifacts API', () => {
       expect(await (await context.files.download(`${teamId}/${artifactId}`)).text()).toBe(
         artifactContent,
       );
-    });
-
-    test('retains expiration metadata through Files SDK', async () => {
-      const response = await putArtifact({ duration: artifactDuration, tag: artifactTag });
-
-      expect(response.status).toBe(202);
-      const artifact = await context.files.head(`${teamId}/${artifactId}`);
-      expect(Number(artifact.metadata?.cachecreatedat)).toEqual(expect.any(Number));
     });
 
     test('fails signed caching explicitly when the adapter lacks metadata support', async () => {

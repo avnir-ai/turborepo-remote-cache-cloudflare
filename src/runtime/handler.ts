@@ -35,9 +35,9 @@ export const handleRequest = async (
   runtimeEnv: RuntimeEnv,
   waitUntil?: WaitUntil,
 ): Promise<Response> => {
+  let bindings: AppBindings;
   try {
-    const bindings = await createAppBindings(runtimeEnv, waitUntil);
-    return await app.fetch(request, bindings);
+    bindings = await createAppBindings(runtimeEnv, waitUntil);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(
@@ -51,4 +51,6 @@ export const handleRequest = async (
       status: 500,
     });
   }
+
+  return app.fetch(request, bindings);
 };

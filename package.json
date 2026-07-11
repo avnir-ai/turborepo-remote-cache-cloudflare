@@ -34,7 +34,7 @@
     "api:sync": "node scripts/remote-cache-openapi.mjs sync",
     "build": "nitro build",
     "build:node": "nitro build --preset node_server",
-    "cf-typegen": "wrangler types",
+    "cf-typegen": "wrangler types --env-file .dev.vars.example",
     "deploy": "nitro deploy",
     "dev": "nitro dev",
     "docs:build": "vitepress build docs",

@@ -67,7 +67,11 @@ const stop = async (child) => {
   const exited = once(child, 'exit');
   child.kill('SIGTERM');
   await Promise.race([exited, wait(2_000)]);
-  if (child.exitCode === null) child.kill('SIGKILL');
+  if (child.exitCode === null) {
+    const forcedExit = once(child, 'exit');
+    child.kill('SIGKILL');
+    await Promise.race([forcedExit, wait(2_000)]);
+  }
 };
 
 const port = await availablePort();
@@ -143,9 +147,15 @@ try {
       join(fixture, 'turbo.json'),
       `${JSON.stringify(
         {
-          $schema: 'https://turbo.build/schema.json',
+          $schema: 'https://turborepo.dev/schema.json',
           remoteCache: { signature: true },
-          tasks: { build: { outputs: ['dist/**'], passThroughEnv: ['EXECUTION_COUNTER'] } },
+          tasks: {
+            build: {
+              inputs: ['build.mjs', 'marker.txt'],
+              outputs: ['dist/**'],
+              passThroughEnv: ['EXECUTION_COUNTER'],
+            },
+          },
         },
         null,
         2,
@@ -161,13 +171,17 @@ await mkdir('dist', { recursive: true });
 await writeFile('dist/result.txt', await readFile('marker.txt', 'utf8'));
 `,
     ),
-    writeFile(join(fixture, 'marker.txt'), `bootstrap-${randomUUID()}`),
+    writeFile(join(fixture, 'marker.txt'), marker),
   ]);
 
-  await run(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['install', '--ignore-scripts'], {
-    cwd: fixture,
-    env: process.env,
-  });
+  await run(
+    process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm',
+    ['install', '--lockfile-only', '--ignore-scripts'],
+    {
+      cwd: fixture,
+      env: process.env,
+    },
+  );
 
   const turboEnvironment = {
     ...process.env,
@@ -179,18 +193,6 @@ await writeFile('dist/result.txt', await readFile('marker.txt', 'utf8'));
     TURBO_TOKEN: token,
   };
   const turboArguments = ['run', 'build', '--cache=remote:rw', '--log-order=stream'];
-
-  // Let Turbo and pnpm create their local bookkeeping before hashing the
-  // fixture used by the assertion below.
-  await run(executable('turbo'), turboArguments, {
-    cwd: fixture,
-    env: turboEnvironment,
-  });
-  await Promise.all([
-    writeFile(join(fixture, 'marker.txt'), marker),
-    rm(join(fixture, 'dist'), { force: true, recursive: true }),
-    rm(counter, { force: true }),
-  ]);
 
   const firstRun = await run(executable('turbo'), turboArguments, {
     cwd: fixture,

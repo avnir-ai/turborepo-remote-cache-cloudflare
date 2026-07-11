@@ -48,6 +48,7 @@ Files SDK provides the storage abstraction:
 
 - R2 and S3 use the official Files SDK adapters.
 - `cloudflareKv`: Project-owned Files SDK adapter for the native Cloudflare KV binding.
+- `prepareUploadBody`: Restores Cloudflare's fixed-length stream marker only for the native R2 adapter.
 - `createStorageServices`: Selects `r2`, `kv`, `s3`, or `custom` from runtime configuration. Legacy auto-detection keeps KV precedence when both bindings exist.
 - `storage.config.ts`: Typed source escape hatch for other Files SDK adapters.
 

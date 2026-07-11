@@ -1,5 +1,6 @@
-import { FilesError, type Body, type StoredFile } from 'files-sdk';
+import { FilesError, type StoredFile } from 'files-sdk';
 
+import { prepareUploadBody, UploadBodyLengthError } from '../../storage/upload-body';
 import {
   DEFAULT_TEAM_ID,
   RemoteCacheProtocolError,
@@ -8,7 +9,6 @@ import {
 } from './contract';
 
 const ARTIFACT_METADATA_KEYS = {
-  createdAt: 'cachecreatedat',
   dirtyHash: 'artifactdirtyhash',
   duration: 'artifactduration',
   sha: 'artifactsha',
@@ -21,11 +21,6 @@ const LEGACY_ARTIFACT_METADATA_KEYS = {
   sha: 'artifactSha',
   tag: 'artifactTag',
 } as const;
-
-interface UploadBody {
-  body: Body;
-  pipe?: Promise<void>;
-}
 
 const selectTeam = (query: { slug?: string; teamId?: string }): string =>
   query.teamId ?? query.slug ?? DEFAULT_TEAM_ID;
@@ -53,36 +48,6 @@ const artifactMetadata = (file: Pick<StoredFile, 'metadata'>): ArtifactMetadata 
 
 const isNotFound = (error: unknown): boolean =>
   error instanceof FilesError && error.code === 'NotFound';
-
-const prepareUploadBody = async (
-  body: ReadableStream<Uint8Array>,
-  contentLength: number,
-  adapterName: string,
-): Promise<UploadBody> => {
-  if (adapterName !== 'r2-binding') return { body };
-
-  if (typeof FixedLengthStream !== 'undefined') {
-    // Nitro preserves the header, but the request body is no longer tagged as
-    // fixed-length. Restore that tag for the native R2 binding without buffering.
-    const fixedLengthBody = new FixedLengthStream(contentLength);
-    return {
-      body: fixedLengthBody.readable,
-      pipe: body.pipeTo(fixedLengthBody.writable),
-    };
-  }
-
-  // The Cloudflare development emulator exposes the R2 binding to Node, where
-  // FixedLengthStream is unavailable. Production Workers use the stream above.
-  const bufferedBody = await new Response(body).arrayBuffer();
-  if (bufferedBody.byteLength !== contentLength) {
-    throw new RemoteCacheProtocolError(
-      400,
-      'bad_request',
-      'Content-Length does not match the request body',
-    );
-  }
-  return { body: bufferedBody };
-};
 
 const getArtifactStatus: RemoteCacheHandlers['getArtifactStatus'] = () => ({
   status: 'enabled',
@@ -119,6 +84,7 @@ const downloadArtifact: RemoteCacheHandlers['downloadArtifact'] = async (input, 
 };
 
 const uploadArtifact: RemoteCacheHandlers['uploadArtifact'] = async (input, context) => {
+  const team = selectTeam(input.query);
   const metadataValues = {
     dirtyHash: input.headers['x-artifact-dirty-hash'],
     duration: input.headers['x-artifact-duration'],
@@ -135,9 +101,8 @@ const uploadArtifact: RemoteCacheHandlers['uploadArtifact'] = async (input, cont
     );
   }
 
-  const metadata = context.files.capabilities.metadata
+  const metadata = needsMetadata
     ? {
-        [ARTIFACT_METADATA_KEYS.createdAt]: String(Date.now()),
         ...(metadataValues.dirtyHash === undefined
           ? {}
           : { [ARTIFACT_METADATA_KEYS.dirtyHash]: metadataValues.dirtyHash }),
@@ -152,24 +117,28 @@ const uploadArtifact: RemoteCacheHandlers['uploadArtifact'] = async (input, cont
           : { [ARTIFACT_METADATA_KEYS.tag]: metadataValues.tag }),
       }
     : undefined;
-  const body = await prepareUploadBody(
-    input.body,
-    input.headers['Content-Length'],
-    context.files.adapter.name,
-  );
-  const upload = context.files.upload(
-    artifactKey(selectTeam(input.query), input.path.hash),
-    body.body,
-    {
-      contentType: 'application/octet-stream',
-      metadata,
-    },
-  );
-  await (body.pipe ? Promise.all([upload, body.pipe]) : upload);
+  let body;
+  try {
+    body = await prepareUploadBody(
+      input.body,
+      input.headers['Content-Length'],
+      context.files.adapter.name,
+    );
+  } catch (error: unknown) {
+    if (error instanceof UploadBodyLengthError) {
+      throw new RemoteCacheProtocolError(400, 'bad_request', error.message);
+    }
+    throw error;
+  }
+  const upload = context.files.upload(artifactKey(team, input.path.hash), body.body, {
+    contentType: 'application/octet-stream',
+    metadata,
+  });
+  await (body.completion ? Promise.all([upload, body.completion]) : upload);
 
   const uploadUrl = new URL(context.request.url);
   uploadUrl.search = '';
-  uploadUrl.searchParams.set('teamId', selectTeam(input.query));
+  uploadUrl.searchParams.set('teamId', team);
   return { urls: [uploadUrl.toString()] };
 };
 

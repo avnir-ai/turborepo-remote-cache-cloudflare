@@ -1,11 +1,11 @@
-import { createExecutionContext } from 'cloudflare:test';
+import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Env } from '~/index';
 
 import { deleteOldCache } from '~/crons/deleteOldCache';
-import { workerHandler } from '~/index';
+import worker, { workerHandler } from '~/index';
 import { app } from '~/routes';
 
 import { createTestAppContext } from './helpers/app';
@@ -55,6 +55,17 @@ describe('remote-cache worker', () => {
     expect(await response.text()).toBe('pong');
   });
 
+  it('responds through the generated Cloudflare environment boundary', async () => {
+    const response = await worker.fetch(
+      new Request('https://turborepo-remote-cache.com/ping'),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('pong');
+  });
+
   it('responds to ping through the Hono app', async () => {
     const { bindings } = createTestAppContext();
     const response = await app.fetch(new Request('http://localhost/ping'), bindings);
@@ -94,7 +105,8 @@ describe('remote-cache scheduled event', () => {
   it('runs retention with the configured storage and default retention window', async () => {
     const ctx = createExecutionContext();
 
-    await workerHandler.scheduled(new TestScheduledEvent(), workerEnv, ctx);
+    workerHandler.scheduled(new TestScheduledEvent(), workerEnv, ctx);
+    await waitOnExecutionContext(ctx);
 
     expect(deleteOldCacheMock).toHaveBeenCalledOnce();
     expect(deleteOldCacheMock).toHaveBeenCalledWith(expect.anything(), 720);

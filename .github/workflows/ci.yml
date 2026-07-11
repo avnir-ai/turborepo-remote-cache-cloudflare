@@ -20,6 +20,7 @@ jobs:
 
       - run: pnpm install
       - run: pnpm api:check
+      - run: pnpm cf-typegen --check
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test

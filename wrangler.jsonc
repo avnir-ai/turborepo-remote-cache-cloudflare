@@ -24,8 +24,8 @@
     },
   ],
   // "kv_namespaces": [{"binding": "KV_STORE", "id": "ea20b0eb60f44b13b8d013eeace98ca2", "preview_id": "ea20b0eb60f44b13b8d013eeace98ca2"}],
-  // Nitro deduplicates this with the schedule in nitro.config.ts. Keeping it
-  // here also preserves cleanup for direct Wrangler deployments of src/index.ts.
+  // Legacy direct-Wrangler deployments of src/index.ts still need this. Nitro
+  // generates the same trigger from nitro.config.ts for the normal deploy path.
   "triggers": {
     "crons": ["0 3 * * *"],
   },
