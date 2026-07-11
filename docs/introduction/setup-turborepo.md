@@ -21,7 +21,7 @@ Add artifact signature validation to the repository's `turbo.json`:
 Signed caching prevents a client from accepting an artifact whose tag does not match its contents. R2, KV, and S3 all support the metadata needed to persist that tag.
 
 ::: warning Custom storage metadata
-A custom Files SDK adapter must persist and return metadata to support signed caching. If it cannot, unsigned cache operations remain available, but uploads containing an artifact tag are rejected. The server does not create metadata sidecar objects.
+A custom Files SDK adapter must persist and return metadata to support signed caching and optional artifact metadata such as task duration or source hashes. If it cannot, plain cache operations remain available, but metadata-bearing uploads are rejected. The server does not create metadata sidecar objects.
 :::
 
 ## 2. Install `dotenv-cli`

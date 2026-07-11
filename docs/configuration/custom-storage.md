@@ -61,10 +61,10 @@ The factory may return an adapter immediately or asynchronously.
 
 ## Signed caching requires metadata
 
-Turborepo sends an artifact tag when signed caching is enabled. A custom adapter must persist that metadata with the object and return it on reads.
+Turborepo sends an artifact tag when signed caching is enabled and may send task duration or source hashes with any upload. A custom adapter must persist that metadata with the object and return it on reads.
 
-- If the adapter supports metadata, signed and unsigned caching work.
-- If it does not, unsigned caching can still work, but an upload containing an artifact tag fails with a clear error.
+- If the adapter supports metadata, all cache modes and artifact headers work.
+- If it does not, plain cache operations can still work, but any metadata-bearing upload fails with a clear error instead of silently discarding contract data.
 - The server does not create a second metadata object because sidecars add extra reads, writes, cleanup rules, and orphan states.
 
 Check the [Files SDK capability matrix](https://files-sdk.dev/docs/capabilities) before choosing an adapter.

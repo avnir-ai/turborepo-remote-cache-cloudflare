@@ -18,6 +18,7 @@ pnpm build:node       # Build the portable Node server target
 # Testing
 pnpm test             # Run tests with coverage
 pnpm test:watch       # Run tests in watch mode
+pnpm test:turbo       # Smoke-test signed remote caching with the real Turbo CLI
 pnpm vitest run tests/routes/v8/artifacts.test.ts  # Run single test file
 
 # Code Quality

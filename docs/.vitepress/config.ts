@@ -63,6 +63,12 @@ export default defineConfig({
           { text: 'Custom Storage', link: '/configuration/custom-storage' },
         ],
       },
+      {
+        text: 'Contributing',
+        items: [
+          { text: 'Remote Cache API', link: '/contributing/remote-cache-api' },
+        ],
+      },
     ],
     socialLinks: [
       { icon: 'github', link: 'https://github.com/AdiRishi/turborepo-remote-cache-cloudflare' },
