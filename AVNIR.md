@@ -28,8 +28,20 @@ The token must be a strong random bearer token and must never be committed.
 
 GitHub deployment is manual via the **Deploy to Cloudflare Workers** workflow.
 It requires the repository variable `CLOUDFLARE_ACCOUNT_ID` and repository
-secrets `CLOUDFLARE_API_TOKEN` and `TURBO_TOKEN`. Use a scoped Cloudflare API token
-for this Worker and R2 account; do not copy a developer's Wrangler OAuth token.
+secrets `CLOUDFLARE_API_TOKEN` and `TURBO_TOKEN`. Create an account-owned API token
+in Avnir Corp Account with **Workers Editor**, scoped only to the existing
+`avnir-turbo-cache` Worker. This permits deployments, Worker secrets, and cron
+schedules. The existing R2 binding does not require separate R2 permissions;
+bucket administration is performed separately. Do not copy a developer's
+Wrangler OAuth token.
+
+Use Wrangler **4.142.0 or later** for this scoped deployment. Older versions
+request the account-level workers.dev subdomain after uploading the Worker,
+which fails with authentication error `10000` for a per-Worker token. The pinned
+version reads the URL from the Worker resource instead. See Cloudflare's
+[Workers permissions](https://developers.cloudflare.com/workers/authorization/workers/)
+and the [Wrangler compatibility fix](https://github.com/cloudflare/workers-sdk/pull/15678).
+
 The workflow fails before building if any required setting is missing. Upstream
 documentation and release workflows are removed from this deployment fork.
 
