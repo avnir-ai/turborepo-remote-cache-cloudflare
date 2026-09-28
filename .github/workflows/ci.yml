@@ -18,11 +18,8 @@ jobs:
           node-version-file: '.nvmrc'
           cache: 'pnpm'
 
-      - run: pnpm install
+      - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
-
-      - name: Coveralls Coverage Report
-        uses: coverallsapp/github-action@v2

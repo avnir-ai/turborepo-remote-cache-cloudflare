@@ -1,15 +1,33 @@
 name: Deploy to Cloudflare Workers
 
 on:
-  repository_dispatch:
-  push:
-    branches: ['master']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-avnir-turbo-cache
+  cancel-in-progress: false
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     name: Build & Deploy
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
     steps:
+      - name: Require deployment credentials
+        shell: bash
+        run: |
+          for name in CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN TURBO_TOKEN; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Required deployment setting $name is missing."
+              exit 1
+            fi
+          done
       - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
@@ -17,21 +35,15 @@ jobs:
           node-version-file: '.nvmrc'
           cache: 'pnpm'
 
-      - run: pnpm install
+      - run: pnpm install --frozen-lockfile
       - run: pnpm build
 
       - name: Deploy
         uses: cloudflare/wrangler-action@v3
-        env:
-          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN || 'SECRET' }}
         with:
-          accountId: ${{ secrets.CF_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
-          apiToken: ${{ secrets.CF_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           packageManager: 'pnpm'
-          preCommands: |
-            echo "*** post commands ***"
-            wrangler r2 bucket create turborepo-cache || true
-            echo "******"
           secrets: |
             TURBO_TOKEN
           command: deploy
