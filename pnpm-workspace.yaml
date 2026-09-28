@@ -2,6 +2,7 @@ allowBuilds:
   esbuild: true
   sharp: true
   workerd: true
+# Required for Wrangler's scoped Worker token deployment fix and its Miniflare dependency.
 minimumReleaseAgeExclude:
   - miniflare@5.20260926.0-alpha
   - wrangler@4.142.0
